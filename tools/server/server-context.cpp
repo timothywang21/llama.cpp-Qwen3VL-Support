@@ -51,6 +51,22 @@ static common_speculative_output_limits server_output_limits(const common_params
     return result;
 }
 
+// RANK-pooling rerankers that read the last token (causal LLMs) can be split across ubatches,
+// unlike bidirectional encoder rerankers (BERT/ModernBERT) which need the whole sequence at once.
+// The library encodes this per-arch (see llama-graph.cpp); we mirror it here by arch name since
+// the server only sees the public C API. Cached: one model per server process, arch never changes.
+static bool is_reranker_causal_arch(const llama_model * model) {
+    static std::string arch;
+    static bool        arch_loaded = false;
+    if (!arch_loaded) {
+        char buf[128] = {0};
+        llama_model_meta_val_str(model, "general.architecture", buf, sizeof(buf));
+        arch        = buf;
+        arch_loaded = true;
+    }
+    return arch == "qwen3" || arch == "qwen3vl";
+}
+
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
     SLOT_STATE_IDLE,
@@ -392,12 +408,26 @@ struct server_slot {
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
     // also we cannot split if the pooling would require any past tokens
     // (MTP supports splitting — uses task->need_embd() not need_embd())
+    // RANK pooling: bidirectional encoder rerankers (BERT/ModernBERT) need the whole sequence in one
+    // pass and must not split, but causal LLM rerankers read the last token and have a KV cache, so
+    // they can be chunked like chat prefill. Allow splitting for those (see is_reranker_causal_arch).
     bool can_split() const {
         GGML_ASSERT(task);
 
-        return
-            !task->need_embd() ||
-            (llama_get_memory(ctx_tgt) && llama_pooling_type(ctx_tgt) == LLAMA_POOLING_TYPE_LAST);
+        if (!task->need_embd()) {
+            return true;
+        }
+        if (!llama_get_memory(ctx_tgt)) {
+            return false;
+        }
+        const auto pooling = llama_pooling_type(ctx_tgt);
+        if (pooling == LLAMA_POOLING_TYPE_LAST) {
+            return true;
+        }
+        if (pooling == LLAMA_POOLING_TYPE_RANK) {
+            return is_reranker_causal_arch(llama_get_model(ctx_tgt));
+        }
+        return false;
     }
 
     bool can_batch_with(server_slot & other_slot) const {
