@@ -763,12 +763,23 @@ Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/B
 
 `query`: The query against which the documents will be ranked.
 
-`documents`: An array strings representing the documents to be ranked.
+`documents`: An array of documents to be ranked. Each element is either a plain
+string, or (for multimodal rerankers such as Qwen3-VL-Reranker) an object of the form
+`{"text": string | [strings], "image": url | data-uri | raw-base64 | [urls]}`. All keys are
+optional; text-only, image-only, or both are allowed. A plain string is treated as
+`{"text": "..."}`.
+
+`instruction`: Optional task-specific instruction (multimodal rerankers only). When omitted, the
+model's default instruction is used.
 
 *Aliases:*
   - `/rerank`
   - `/v1/rerank`
   - `/v1/reranking`
+
+The endpoint also accepts the TEI format: send `texts` instead of `documents`, and set
+`return_text: true` to echo each document's text back in the response. Images are never
+returned; the `text` field is the text parts joined (image-only documents echo `""`).
 
 *Examples:*
 
@@ -786,6 +797,53 @@ curl http://127.0.0.1:8012/v1/rerank \
             ]
     }' | jq
 ```
+
+Multimodal (Qwen3-VL-Reranker) - mix text and images in `query` and/or `documents`:
+
+```shell
+curl http://127.0.0.1:8012/v1/rerank \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "Qwen/Qwen3-VL-Reranker-2B",
+        "instruction": "Retrieve images or text relevant to the user query.",
+        "query": {
+            "text": "A city skyline with tall buildings and a river",
+            "image": "data:image/jpeg;base64,<base64>"
+        },
+        "documents": [
+            "a plain string document is also valid",
+            {
+                "text": "The Boston skyline at dusk",
+                "image": "https://example.com/skyline.jpg"
+            },
+            {
+                "text": "caption for the two-figure spread",
+                "image": ["https://example.com/fig1.png", "data:image/jpeg;base64,<base64>"]
+            }
+        ],
+        "top_n": 2
+    }' | jq
+```
+
+The response is a list of `{index, relevance_score}` sorted by score (Jina format), or a bare
+array of `{index, score}` (+ optional `text`) in TEI format. `relevance_score` / `score` is the
+probability that the document matches the query, in `[0, 1]`.
+
+*Input size limit:*
+
+Rerank uses `rank` pooling, so the whole prompt (instruction + query + document, plus any vision
+tokens from images) must be processed in a single forward pass - it cannot be split across ubatches.
+The server therefore rejects a request whose tokenized length exceeds `--ubatch-size`:
+
+```txt
+input (N tokens) is too large to process. increase the physical batch size (current batch size: M)
+```
+
+This applies to long **text** documents as well as images, not just multimodal input. The default
+`--ubatch-size 512` only covers short snippets; to rerank full documents (or inputs with images),
+raise `--ubatch-size` above the token count of your largest single query + document. This is separate
+from, and usually much smaller than, the model's context window (`--ctx-size`). Note that a larger
+`--ubatch-size` uses more memory, since more tokens are computed at once.
 
 ### POST `/infill`: For code infilling.
 

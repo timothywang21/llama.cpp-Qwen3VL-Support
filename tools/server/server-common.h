@@ -271,6 +271,9 @@ size_t validate_utf8(const std::string& text);
 // if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
 server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder = false);
 
+// decode one media url (http/file/data-uri/raw-base64) into out_files; throws on failure
+void handle_media(std::vector<raw_buffer> & out_files, const std::string & url, const std::string & media_path, bool accept_base64_uri);
+
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
  * this supports these cases:
@@ -533,12 +536,17 @@ llama_tokens format_prompt_infill(
         const llama_tokens & tokens_prompt);
 
 // format rerank task: [BOS]query[EOS][SEP]doc[EOS].
+// query_files/doc_files carry decoded media for multimodal (Qwen) inputs; when non-empty the
+// prompt is built with get_media_marker() sentinels and spliced via process_mtmd_prompt.
 server_tokens format_prompt_rerank(
         const struct llama_model * model,
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
-        const std::string & doc);
+        const std::string & doc,
+        const std::vector<raw_buffer> & query_files = {},
+        const std::vector<raw_buffer> & doc_files   = {},
+        const std::string & instruction             = "");
 
 // simple implementation of a pipe
 // used for streaming data between threads
