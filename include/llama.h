@@ -656,6 +656,9 @@ extern "C" {
     // Returns true if the model is diffusion-based (like LLaDA, Dream, etc.)
     LLAMA_API bool llama_model_is_diffusion(const struct llama_model * model);
 
+    // Returns true if RANK pooling reads the last token (causal LLM rerankers like Qwen3 and Qwen3-VL)
+    LLAMA_API bool llama_model_rank_pooling_is_causal(const struct llama_model * model);
+
     // Returns 0 on success
     LLAMA_API uint32_t llama_model_quantize(
             const char * fname_inp,
