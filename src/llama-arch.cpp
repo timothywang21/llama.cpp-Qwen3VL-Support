@@ -1096,6 +1096,14 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
     }
 }
 
+bool llm_arch_rank_pooling_is_causal(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_QWEN3:
+        case LLM_ARCH_QWEN3VL: return true;
+        default:               return false;
+    }
+}
+
 bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_QWEN35:
