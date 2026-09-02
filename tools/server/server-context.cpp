@@ -5129,144 +5129,7 @@ void server_routes::init_routes() {
     };
 
     this->post_rerank = [this](const server_http_req & req) {
-        auto res = create_response();
-        if (!params.embedding || params.pooling_type != LLAMA_POOLING_TYPE_RANK) {
-            res->error(format_error_response("This server does not support reranking. Start it with `--reranking`", ERROR_TYPE_NOT_SUPPORTED));
-            return res;
-        }
-
-        const json body = json::parse(req.body);
-
-        // if true, use TEI API format, otherwise use Jina API format
-        // Jina: https://jina.ai/reranker/
-        // TEI: https://huggingface.github.io/text-embeddings-inference/#/Text%20Embeddings%20Inference/rerank
-        bool is_tei_format = body.contains("texts");
-
-        // expand one rerank input item: plain string or Qwen multimodal object
-        // {"text": str|[str], "image": url|data-uri|raw-base64|[...]}
-        auto parse_item = [&](const json & item, std::string & out_text, std::vector<raw_buffer> & out_files) {
-            if (item.is_string()) {
-                out_text = item.get<std::string>();
-                return;
-            }
-            if (!item.is_object()) {
-                throw std::invalid_argument("rerank input must be a string or an object of the form {\"text\": ..., \"image\": ...}");
-            }
-            if (item.contains("video") || item.contains("fps") || item.contains("max_frames")) {
-                throw std::invalid_argument("video/fps/max_frames are not supported for rerank input");
-            }
-            json text = item.value("text", json());
-            if (text.is_string()) {
-                out_text += text.get<std::string>();
-            } else if (text.is_array()) {
-                for (const auto & t : text) {
-                    if (!t.is_string()) {
-                        throw std::invalid_argument("\"text\" array elements must be strings");
-                    }
-                    out_text += t.get<std::string>();
-                }
-            } else if (!text.is_null()) {
-                throw std::invalid_argument("\"text\" must be a string or an array of strings");
-            }
-            json image = item.value("image", json());
-            auto add_image = [&](const std::string & url) {
-                // marker is appended by format_prompt_rerank, one per decoded file
-                handle_media(out_files, url, params.media_path, true);
-            };
-            if (image.is_string()) {
-                add_image(image.get<std::string>());
-            } else if (image.is_array()) {
-                for (const auto & u : image) {
-                    if (!u.is_string()) {
-                        throw std::invalid_argument("\"image\" array elements must be strings");
-                    }
-                    add_image(u.get<std::string>());
-                }
-            } else if (!image.is_null()) {
-                throw std::invalid_argument("\"image\" must be a string or an array of strings");
-            }
-        };
-
-        std::string query_str;
-        std::vector<raw_buffer> query_files;
-        if (body.count("query") == 1) {
-            try {
-                parse_item(body.at("query"), query_str, query_files);
-            } catch (const std::invalid_argument & e) {
-                res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
-                return res;
-            }
-        } else {
-            res->error(format_error_response("\"query\" must be provided", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-
-        json documents_json = json_value(body, "documents",
-                                json_value(body, "texts", json::array()));
-        if (!documents_json.is_array() || documents_json.empty()) {
-            res->error(format_error_response("\"documents\" must be a non-empty array of strings or objects", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-
-        std::vector<std::string>          documents(documents_json.size());
-        std::vector<std::vector<raw_buffer>> document_files(documents_json.size());
-        for (size_t i = 0; i < documents_json.size(); i++) {
-            try {
-                parse_item(documents_json[i], documents[i], document_files[i]);
-            } catch (const std::invalid_argument & e) {
-                res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
-                return res;
-            }
-        }
-
-        // optional task-specific instruction, substituted into the rerank template's <Instruct> slot
-        const std::string instruction = json_value(body, "instruction", std::string());
-
-        int top_n = json_value(body, "top_n", (int)documents.size());
-
-        // create and queue the task
-        json responses = json::array();
-        auto & rd = res->rd;
-        {
-            std::vector<server_task> tasks;
-            tasks.reserve(documents.size());
-            for (size_t i = 0; i < documents.size(); i++) {
-                auto tmp = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query_str, documents[i], query_files, document_files[i], instruction, ctx_server.init_opt);
-                server_task task = server_task(SERVER_TASK_TYPE_RERANK);
-                task.id     = rd.get_new_id();
-                task.tokens = std::move(tmp);
-                tasks.push_back(std::move(task));
-            }
-            rd.post_tasks(std::move(tasks));
-        }
-
-        // wait for the results
-        auto all_results = rd.wait_for_all(req.should_stop);
-
-        // collect results
-        if (all_results.is_terminated) {
-            return res; // connection is closed
-        } else if (all_results.error) {
-            res->error(all_results.error->to_json());
-            return res;
-        } else {
-            for (auto & res : all_results.results) {
-                GGML_ASSERT(dynamic_cast<server_task_result_rerank*>(res.get()) != nullptr);
-                responses.push_back(res->to_json());
-            }
-        }
-
-        // write JSON response
-        json root = format_response_rerank(
-            body,
-            meta->model_name,
-            responses,
-            is_tei_format,
-            documents,
-            top_n);
-
-        res->ok(root);
-        return res;
+        return handle_rerank_impl(req);
     };
 
     this->get_lora_adapters = [this](const server_http_req & req) {
@@ -5608,6 +5471,147 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
     json root = res_type == TASK_RESPONSE_TYPE_OAI_EMBD
         ? format_embeddings_response_oaicompat(body, meta->model_name, responses, use_base64)
         : json(responses);
+    res->ok(root);
+    return res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const server_http_req & req) {
+    auto res = create_response();
+    if (!params.embedding || params.pooling_type != LLAMA_POOLING_TYPE_RANK) {
+        res->error(format_error_response("This server does not support reranking. Start it with `--reranking`", ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
+
+    const json body = json::parse(req.body);
+
+    // if true, use TEI API format, otherwise use Jina API format
+    // Jina: https://jina.ai/reranker/
+    // TEI: https://huggingface.github.io/text-embeddings-inference/#/Text%20Embeddings%20Inference/rerank
+    bool is_tei_format = body.contains("texts");
+
+    // expand one rerank input item: plain string or Qwen multimodal object
+    // {"text": str|[str], "image": url|data-uri|raw-base64|[...]}
+    auto parse_item = [&](const json & item, std::string & out_text, std::vector<raw_buffer> & out_files) {
+        if (item.is_string()) {
+            out_text = item.get<std::string>();
+            return;
+        }
+        if (!item.is_object()) {
+            throw std::invalid_argument("rerank input must be a string or an object of the form {\"text\": ..., \"image\": ...}");
+        }
+        if (item.contains("video") || item.contains("fps") || item.contains("max_frames")) {
+            throw std::invalid_argument("video/fps/max_frames are not supported for rerank input");
+        }
+        json text = item.value("text", json());
+        if (text.is_string()) {
+            out_text += text.get<std::string>();
+        } else if (text.is_array()) {
+            for (const auto & t : text) {
+                if (!t.is_string()) {
+                    throw std::invalid_argument("\"text\" array elements must be strings");
+                }
+                out_text += t.get<std::string>();
+            }
+        } else if (!text.is_null()) {
+            throw std::invalid_argument("\"text\" must be a string or an array of strings");
+        }
+        json image = item.value("image", json());
+        auto add_image = [&](const std::string & url) {
+            // marker is appended by format_prompt_rerank, one per decoded file
+            handle_media(out_files, url, params.media_path);
+        };
+        if (image.is_string()) {
+            add_image(image.get<std::string>());
+        } else if (image.is_array()) {
+            for (const auto & u : image) {
+                if (!u.is_string()) {
+                    throw std::invalid_argument("\"image\" array elements must be strings");
+                }
+                add_image(u.get<std::string>());
+            }
+        } else if (!image.is_null()) {
+            throw std::invalid_argument("\"image\" must be a string or an array of strings");
+        }
+    };
+
+    std::string query_str;
+    std::vector<raw_buffer> query_files;
+    if (body.count("query") == 1) {
+        try {
+            parse_item(body.at("query"), query_str, query_files);
+        } catch (const std::invalid_argument & e) {
+            res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+    } else {
+        res->error(format_error_response("\"query\" must be provided", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    json documents_json = json_value(body, "documents",
+                            json_value(body, "texts", json::array()));
+    if (!documents_json.is_array() || documents_json.empty()) {
+        res->error(format_error_response("\"documents\" must be a non-empty array of strings or objects", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    std::vector<std::string>          documents(documents_json.size());
+    std::vector<std::vector<raw_buffer>> document_files(documents_json.size());
+    for (size_t i = 0; i < documents_json.size(); i++) {
+        try {
+            parse_item(documents_json[i], documents[i], document_files[i]);
+        } catch (const std::invalid_argument & e) {
+            res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+    }
+
+    // optional task-specific instruction, substituted into the rerank template's <Instruct> slot
+    const std::string instruction = json_value(body, "instruction", std::string());
+
+    int top_n = json_value(body, "top_n", (int)documents.size());
+
+    // create and queue the task
+    json responses = json::array();
+    auto & rd = res->rd;
+    {
+        std::vector<server_task> tasks;
+        tasks.reserve(documents.size());
+        for (size_t i = 0; i < documents.size(); i++) {
+            auto tmp = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query_str, documents[i], query_files, document_files[i], instruction, ctx_server.init_opt);
+            server_task task = server_task(SERVER_TASK_TYPE_RERANK);
+            task.id     = rd.get_new_id();
+            task.tokens = std::move(tmp);
+            tasks.push_back(std::move(task));
+        }
+        rd.post_tasks(std::move(tasks));
+    }
+
+    // wait for the results
+    auto all_results = rd.wait_for_all(req.should_stop);
+
+    // collect results
+    if (all_results.is_terminated) {
+        return res; // connection is closed
+    } else if (all_results.error) {
+        res->error(all_results.error->to_json());
+        return res;
+    } else {
+        for (auto & res : all_results.results) {
+            GGML_ASSERT(dynamic_cast<server_task_result_rerank*>(res.get()) != nullptr);
+            responses.push_back(res->to_json());
+        }
+    }
+
+    // write JSON response
+    json root = format_response_rerank(
+        body,
+        meta->model_name,
+        responses,
+        is_tei_format,
+        documents,
+        top_n);
+
     res->ok(root);
     return res;
 }
