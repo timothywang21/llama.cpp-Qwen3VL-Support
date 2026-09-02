@@ -5397,7 +5397,65 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
-    auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
+    // SHAPE 1: multimodal-compatible wrapped object: { "content": [ {type:text|image_url, ...}, ... ] }.
+    auto is_wrapped_content = [](const json & p) {
+        if (!p.is_object() || !p.contains("content")) {
+            return false;
+        }
+        const json & content = p.at("content");
+        if (!content.is_array() || content.empty()) {
+            return false;
+        }
+        for (const auto & part : content) {
+            if (!part.is_object() || !part.contains("type")) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // SHAPE 2: a bare array of typed parts ({type:text|image_url}) is the pre-wrapped shape; reject.
+    auto is_bare_content_array = [](const json & p) {
+        if (!p.is_array() || p.empty()) {
+            return false;
+        }
+        for (const auto & el : p) {
+            if (!el.is_object() || !el.contains("type")) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    std::vector<server_tokens> tokenized_prompts;
+    if (is_wrapped_content(prompt)) {
+        // single multimodal input: { "content": [...] }
+        tokenized_prompts.push_back(tokenize_oai_content_array(ctx_server.mctx, meta->chat_params.media_path, prompt.at("content"), ctx_server.init_opt));
+    } else if (prompt.is_array()) {
+        for (const auto & p : prompt) {
+            if (is_wrapped_content(p)) {
+                tokenized_prompts.push_back(tokenize_oai_content_array(ctx_server.mctx, meta->chat_params.media_path, p.at("content"), ctx_server.init_opt));
+            } else if (p.is_object()) {
+                // an object that is not a valid wrapped input: reject with a clear message rather
+                // than falling through to tokenize_input_prompts (which would fail opaquely).
+                res->error(format_error_response("multimodal \"input\" elements must be objects of the form { \"content\": [ { \"type\": \"text\"|\"image_url\", ... } ] }; got: " + safe_json_to_str(p), ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            } else if (is_bare_content_array(p)) {
+                res->error(format_error_response("bare content arrays are no longer supported; wrap each input as { \"content\": [...] }", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            } else {
+                for (auto & t : tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, p, true, true, ctx_server.init_opt)) {
+                    tokenized_prompts.push_back(std::move(t));
+                }
+            }
+        }
+    } else if (is_bare_content_array(prompt)) {
+        res->error(format_error_response("bare content arrays are no longer supported; wrap each input as { \"content\": [...] }", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    } else {
+        tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
+    }
+
     for (const auto & tokens : tokenized_prompts) {
         // this check is necessary for models that do not add BOS token to the input
         if (tokens.empty()) {
