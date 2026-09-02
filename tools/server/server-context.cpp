@@ -5427,11 +5427,26 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         return true;
     };
 
+    // SHAPE 3: a bare token / mixed array containing numbers ([12, 34, 56] or [12, "string", 56]) is a single
+    // input handled by tokenize_input_prompts(); it must not be iterated as a list of inputs. an
+    // all-string array is a genuine list of prompts and keeps the per-element behavior.
+    auto is_bare_token_array = [](const json & p) {
+        if (!p.is_array() || p.empty()) {
+            return false;
+        }
+        for (const auto & el : p) {
+            if (el.is_number()) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     std::vector<server_tokens> tokenized_prompts;
     if (is_wrapped_content(prompt)) {
         // single multimodal input: { "content": [...] }
         tokenized_prompts.push_back(tokenize_oai_content_array(ctx_server.mctx, meta->chat_params.media_path, prompt.at("content"), ctx_server.init_opt));
-    } else if (prompt.is_array()) {
+    } else if (prompt.is_array() && !is_bare_token_array(prompt)) {
         for (const auto & p : prompt) {
             if (is_wrapped_content(p)) {
                 tokenized_prompts.push_back(tokenize_oai_content_array(ctx_server.mctx, meta->chat_params.media_path, p.at("content"), ctx_server.init_opt));
