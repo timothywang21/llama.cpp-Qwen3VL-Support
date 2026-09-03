@@ -436,14 +436,25 @@ struct server_slot {
     }
 
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
-    // also we cannot split if the pooling would require any past tokens
     // (MTP supports splitting — uses task->need_embd() not need_embd())
     bool can_split() const {
         GGML_ASSERT(task);
 
-        return
-            !task->need_embd() ||
-            (llama_get_memory(ctx_tgt) && llama_pooling_type(ctx_tgt) == LLAMA_POOLING_TYPE_LAST);
+        if (!task->need_embd()) {
+            return true;
+        }
+        if (!llama_get_memory(ctx_tgt)) {
+            return false;
+        }
+        const auto pooling = llama_pooling_type(ctx_tgt);
+        if (pooling == LLAMA_POOLING_TYPE_LAST) {
+            return true;
+        }
+        if (pooling == LLAMA_POOLING_TYPE_RANK) {
+            // causal LLM rerankers read the last token and have a KV cache, so they can be chunked/split.
+            return llama_model_rank_pooling_is_causal(llama_get_model(ctx_tgt));
+        }
+        return false;
     }
 
     bool can_batch_with(server_slot & other_slot) const {
