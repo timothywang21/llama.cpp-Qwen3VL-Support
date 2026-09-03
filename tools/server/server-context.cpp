@@ -5500,7 +5500,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
     // TEI: https://huggingface.github.io/text-embeddings-inference/#/Text%20Embeddings%20Inference/rerank
     bool is_tei_format = body.contains("texts");
 
-    // expand one rerank input item: plain string or Qwen multimodal object
+    // LAMDA FUNCTION DECLARATION: expand one rerank input item: plain string or Jina/TEI compatabile format
     // {"text": str|[str], "image": url|data-uri|raw-base64|[...]}
     auto parse_item = [&](const json & item, std::string & out_text, std::vector<raw_buffer> & out_files) {
         if (item.is_string()) {
@@ -5513,7 +5513,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         if (item.contains("video") || item.contains("fps") || item.contains("max_frames")) {
             throw std::invalid_argument("video/fps/max_frames are not supported for rerank input");
         }
-        json text = item.value("text", json());
+        json text = item.value("text", json()); // Parsing the "text" field, which can be a string or an array of strings
         if (text.is_string()) {
             out_text += text.get<std::string>();
         } else if (text.is_array()) {
@@ -5526,7 +5526,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         } else if (!text.is_null()) {
             throw std::invalid_argument("\"text\" must be a string or an array of strings");
         }
-        json image = item.value("image", json());
+        json image = item.value("image", json()); // Parsing the "image" field, which can be a string (base64) or an array of strings
         auto add_image = [&](const std::string & url) {
             // marker is appended by format_prompt_rerank, one per decoded file
             handle_media(out_files, url, params.media_path);
@@ -5545,6 +5545,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         }
     };
 
+    // Parse query 
     std::string query_str;
     std::vector<raw_buffer> query_files;
     if (body.count("query") == 1) {
@@ -5559,13 +5560,15 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         return res;
     }
 
+    // Resolve JINA/TEI format ambiguity
     json documents_json = json_value(body, "documents",
-                            json_value(body, "texts", json::array()));
-    if (!documents_json.is_array() || documents_json.empty()) {
-        res->error(format_error_response("\"documents\" must be a non-empty array of strings or objects", ERROR_TYPE_INVALID_REQUEST));
-        return res;
-    }
-
+        json_value(body, "texts", json::array()));
+        if (!documents_json.is_array() || documents_json.empty()) {
+            res->error(format_error_response("\"documents\" must be a non-empty array of strings or objects", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        
+    // Parse documents
     std::vector<std::string>          documents(documents_json.size());
     std::vector<std::vector<raw_buffer>> document_files(documents_json.size());
     for (size_t i = 0; i < documents_json.size(); i++) {
@@ -5577,9 +5580,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         }
     }
 
-    // optional task-specific instruction, substituted into the rerank template's <Instruct> slot
-    const std::string instruction = json_value(body, "instruction", std::string());
-
     int top_n = json_value(body, "top_n", (int)documents.size());
 
     // create and queue the task
@@ -5589,7 +5589,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         std::vector<server_task> tasks;
         tasks.reserve(documents.size());
         for (size_t i = 0; i < documents.size(); i++) {
-            auto tmp = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query_str, documents[i], query_files, document_files[i], instruction, ctx_server.init_opt);
+            auto tmp = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query_str, documents[i], query_files, document_files[i], ctx_server.init_opt);
             server_task task = server_task(SERVER_TASK_TYPE_RERANK);
             task.id     = rd.get_new_id();
             task.tokens = std::move(tmp);

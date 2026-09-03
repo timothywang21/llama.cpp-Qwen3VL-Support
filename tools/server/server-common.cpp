@@ -1825,7 +1825,6 @@ server_tokens format_prompt_rerank(
         const std::string & doc,
         const std::vector<raw_buffer> & query_files,
         const std::vector<raw_buffer> & doc_files,
-        const std::string & instruction,
         const mtmd_helper_init_opt & init_opt) {
     server_tokens result = {};
 
@@ -1848,10 +1847,6 @@ server_tokens format_prompt_rerank(
         }
 
         std::string prompt = rerank_prompt;
-        // optional instruction: swap the baked-in default sentence in place
-        if (!instruction.empty()) {
-            string_replace_all(prompt, "Given a web search query, retrieve relevant passages that answer the query", instruction);
-        }
         string_replace_all(prompt, "{query}"   , q);
         string_replace_all(prompt, "{document}", d  );
 

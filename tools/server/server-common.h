@@ -558,7 +558,6 @@ server_tokens format_prompt_rerank(
         const std::string & doc,
         const std::vector<raw_buffer> & query_files,
         const std::vector<raw_buffer> & doc_files,
-        const std::string & instruction,
         const mtmd_helper_init_opt & init_opt);
 
 // simple implementation of a pipe

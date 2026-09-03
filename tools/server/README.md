@@ -777,9 +777,6 @@ string, or (for multimodal rerankers such as Qwen3-VL-Reranker) an object of the
 optional; text-only, image-only, or both are allowed. A plain string is treated as
 `{"text": "..."}`.
 
-`instruction`: Optional task-specific instruction (multimodal rerankers only). When omitted, the
-model's default instruction is used.
-
 *Aliases:*
   - `/rerank`
   - `/v1/rerank`
@@ -813,7 +810,6 @@ curl http://127.0.0.1:8012/v1/rerank \
     -H "Content-Type: application/json" \
     -d '{
         "model": "Qwen/Qwen3-VL-Reranker-2B",
-        "instruction": "Retrieve images or text relevant to the user query.",
         "query": {
             "text": "A city skyline with tall buildings and a river",
             "image": "data:image/jpeg;base64,<base64>"
@@ -839,7 +835,7 @@ probability that the document matches the query, in `[0, 1]`.
 
 *Input size limit:*
 
-Rerank uses `rank` pooling, so the whole prompt (instruction + query + document, plus any vision
+Rerank uses `rank` pooling, so the whole prompt (query + document, plus any vision
 tokens from images) must be processed in a single forward pass - it cannot be split across ubatches.
 The server therefore rejects a request whose tokenized length exceeds `--ubatch-size`:
 
