@@ -282,8 +282,8 @@ server_tokens process_mtmd_prompt(
 // marker; the result is spliced via process_mtmd_prompt(). returns server_tokens with has_mtmd set.
 server_tokens tokenize_oai_content_array(mtmd_context * mctx, const std::string & media_path, const json & content, const mtmd_helper_init_opt & init_opt);
 
-// decode one media url (http/file/data-uri/raw-base64) into out_files; throws on failure
-void handle_media(std::vector<raw_buffer> & out_files, const std::string & url, const std::string & media_path, bool accept_base64_uri);
+// decode one media url (http/file/data-uri) into out_files; throws on failure
+void handle_media(std::vector<raw_buffer> & out_files, const std::string & url, const std::string & media_path);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
