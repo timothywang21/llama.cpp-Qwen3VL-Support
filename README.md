@@ -6,5 +6,5 @@
 > This fork adds multimodal support for Qwen3-VL (and possibly other) models:
 > - Multimodal `/v1/embeddings` (image + text input)
 > - Multimodal `/v1/rerank` (image + text input)
-> - Full support for Qwen3-VL causal rerank models
+> - Full support for Qwen3-VL causal reranker and embedding models
 
