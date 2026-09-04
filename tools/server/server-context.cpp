@@ -3209,7 +3209,11 @@ private:
                                 return;
                             }
 
-                            if (slot.task->params.cache_prompt) {
+                            const bool is_stateless_task =
+                                slot.task->type == SERVER_TASK_TYPE_EMBEDDING ||
+                                slot.task->type == SERVER_TASK_TYPE_RERANK;
+
+                            if (slot.task->params.cache_prompt && !is_stateless_task) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
